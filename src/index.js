@@ -123,26 +123,35 @@ export default {
 
       try {
         const payload = await request.json();
+        const debugEnabled = toBoolean(payload && payload.debug);
         const input = normalizeBindRequest(payload);
         const client = new StripeSessionClient();
         const result = await runStripeBindFlow(client, input.checkoutSessionId, input.publishableKey, input.card, input.profile, env);
 
-        return jsonResponse(
-          {
-            success: true,
-            data: {
-              checkout_session_id: input.checkoutSessionId,
-              result: {
-                payment_status: result.paymentStatus,
-                checkout_status: result.checkoutStatus,
-                setup_intent_status: result.setupIntent,
-                payment_intent_status: result.paymentIntent,
-                submission_attempt_state: result.submissionState,
-                next_action_type: result.nextActionType,
-                failure_reason: result.failureReason,
-              },
+        const responsePayload = {
+          success: true,
+          data: {
+            checkout_session_id: input.checkoutSessionId,
+            result: {
+              payment_status: result.paymentStatus,
+              checkout_status: result.checkoutStatus,
+              setup_intent_status: result.setupIntent,
+              payment_intent_status: result.paymentIntent,
+              submission_attempt_state: result.submissionState,
+              next_action_type: result.nextActionType,
+              failure_reason: result.failureReason,
             },
           },
+        };
+        if (result.challenge) {
+          responsePayload.data.result.challenge = result.challenge;
+        }
+        if (debugEnabled && result.debug) {
+          responsePayload.data.debug = result.debug;
+        }
+
+        return jsonResponse(
+          responsePayload,
           200,
           env,
         );
@@ -406,6 +415,7 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   const paymentIntent = firstNonEmpty(valueString(confirmJSON?.payment_intent?.status), "unknown");
   const submissionState = firstNonEmpty(valueString(confirmJSON?.submission_attempt?.state), "unknown");
   const nextActionType = firstNonEmpty(detectNextActionType(confirmJSON), "unknown");
+  const challenge = extractChallengeState(confirmJSON);
   const failureReason = resolveFailureReason(confirmJSON, {
     paymentStatus,
     checkoutStatus,
@@ -413,9 +423,20 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
     paymentIntent,
     submissionState,
     nextActionType,
+    challenge,
   });
 
-  return { paymentStatus, checkoutStatus, setupIntent, paymentIntent, submissionState, nextActionType, failureReason };
+  return {
+    paymentStatus,
+    checkoutStatus,
+    setupIntent,
+    paymentIntent,
+    submissionState,
+    nextActionType,
+    failureReason,
+    challenge,
+    debug: extractDebugState(confirmJSON),
+  };
 }
 
 async function stripeRequest(client, method, path, { queryValues, bodyValues, publishableKey }) {
@@ -1300,6 +1321,52 @@ function readStatusField(payload, key) {
   return "";
 }
 
+function extractDebugState(payload) {
+  return {
+    three_ds_detected: Boolean(payload?.three_ds_detected),
+    three_ds_executed: Boolean(payload?.three_ds_executed),
+    three_ds_provider: clean(payload?.three_ds_provider),
+    three_ds_error: clean(payload?.three_ds_error),
+    payment_page_next_action: cloneDebugValue(payload?.next_action),
+    setup_intent: {
+      id: clean(payload?.setup_intent?.id),
+      status: clean(payload?.setup_intent?.status),
+      next_action: cloneDebugValue(payload?.setup_intent?.next_action),
+      last_setup_error: cloneDebugValue(payload?.setup_intent?.last_setup_error),
+    },
+    payment_intent: {
+      id: clean(payload?.payment_intent?.id),
+      status: clean(payload?.payment_intent?.status),
+      next_action: cloneDebugValue(payload?.payment_intent?.next_action),
+      last_payment_error: cloneDebugValue(payload?.payment_intent?.last_payment_error),
+    },
+    submission_attempt: cloneDebugValue(payload?.submission_attempt),
+  };
+}
+
+function cloneDebugValue(value) {
+  if (value === null || typeof value === "undefined") return null;
+  if (Array.isArray(value)) return value.map((item) => cloneDebugValue(item));
+  if (typeof value !== "object") return value;
+  const out = {};
+  Object.entries(value).forEach(([key, raw]) => {
+    out[key] = shouldRedactDebugKey(key) ? redactDebugScalar(raw) : cloneDebugValue(raw);
+  });
+  return out;
+}
+
+function shouldRedactDebugKey(key) {
+  const lower = clean(key).toLowerCase();
+  return lower.includes("secret") || lower.includes("token") || lower === "publishable_key";
+}
+
+function redactDebugScalar(value) {
+  const raw = valueString(value);
+  if (!raw) return raw;
+  if (raw.length <= 8) return "***";
+  return `${raw.slice(0, 4)}***${raw.slice(-4)}`;
+}
+
 function detectNextActionType(payload) {
   if (!payload || typeof payload !== "object") return "";
   return parseNextActionType(payload.next_action)
@@ -1328,9 +1395,41 @@ function parseNextActionType(raw) {
   return outerType;
 }
 
+function extractChallengeState(payload) {
+  const nextActions = [
+    payload?.next_action,
+    payload?.setup_intent?.next_action,
+    payload?.payment_intent?.next_action,
+  ];
+  for (const action of nextActions) {
+    const challenge = parseChallengeFromNextAction(action);
+    if (challenge) return challenge;
+  }
+  return null;
+}
+
+function parseChallengeFromNextAction(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (clean(raw.type) !== "use_stripe_sdk") return null;
+  const sdk = raw.use_stripe_sdk && typeof raw.use_stripe_sdk === "object" ? raw.use_stripe_sdk : null;
+  if (!sdk) return null;
+  const sdkType = firstNonEmpty(clean(sdk.type), clean(sdk?.stripe_js?.type));
+  if (sdkType !== "intent_confirmation_challenge") return null;
+  const stripeJS = sdk.stripe_js && typeof sdk.stripe_js === "object" ? sdk.stripe_js : {};
+  return {
+    kind: sdkType,
+    provider: "stripe_js",
+    browser_verification_required: true,
+    verification_url: clean(stripeJS.verification_url),
+    site_key_present: Boolean(clean(stripeJS.site_key)),
+    rqdata_present: Boolean(clean(stripeJS.rqdata)),
+  };
+}
+
 function resolveFailureReason(payload, result) {
   if (result.paymentStatus === "paid" || result.paymentIntent === "succeeded" || result.setupIntent === "succeeded") return "none";
   if (result.submissionState === "succeeded" && !clean(payload?.three_ds_error)) return "none";
+  if (result.challenge?.kind === "intent_confirmation_challenge") return "browser_verification_required";
   if (normalizedKnownField(clean(payload?.three_ds_error))) return normalizedKnownField(clean(payload?.three_ds_error));
   if (normalizedKnownField(result.nextActionType)) return normalizedKnownField(result.nextActionType);
 
