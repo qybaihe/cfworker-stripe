@@ -254,52 +254,80 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
     throw new Error(`不是0元账单: total_summary.total=${initAmountText}`);
   }
 
-  const returnURL = valueString(initJSON.return_url);
+  const mode = clean(initJSON.mode).toLowerCase();
   const seededElementsSessionID = randomID("elements");
-  const taxBody = new URLSearchParams();
-  taxBody.set("tax_region[country]", firstNonEmpty(profile.country, DEFAULT_PROFILE.country));
-  taxBody.set("tax_region[line1]", firstNonEmpty(profile.line1, DEFAULT_PROFILE.line1));
-  taxBody.set("tax_region[city]", firstNonEmpty(profile.city, DEFAULT_PROFILE.city));
-  taxBody.set("tax_region[postal_code]", firstNonEmpty(profile.postal, DEFAULT_PROFILE.postal));
-  taxBody.set("tax_region[state]", firstNonEmpty(profile.state, DEFAULT_PROFILE.state));
-  taxBody.set("elements_session_client[elements_init_source]", "custom_checkout");
-  taxBody.set("elements_session_client[referrer_host]", "chatgpt.com");
-  taxBody.set("elements_session_client[session_id]", seededElementsSessionID);
-  taxBody.set("elements_session_client[stripe_js_id]", clientSessionID);
-  taxBody.set("elements_session_client[locale]", "zh");
-  taxBody.set("elements_session_client[is_aggregation_expected]", "false");
-  taxBody.set("client_attribution_metadata[merchant_integration_additional_elements][0]", "payment");
-  taxBody.set("client_attribution_metadata[merchant_integration_additional_elements][1]", "address");
-  const taxJSON = await stripeRequest(client, "POST", `/v1/payment_pages/${encodeURIComponent(checkoutSessionId)}`, {
-    bodyValues: taxBody,
-    publishableKey,
-  });
-
-  const initChecksum = firstNonEmpty(valueString(taxJSON.init_checksum), valueString(initJSON.init_checksum));
-  const checkoutConfigID = valueString(taxJSON.config_id);
+  const initChecksum = valueString(initJSON.init_checksum);
+  const checkoutConfigID = valueString(initJSON.config_id);
+  const currency = firstNonEmpty(valueString(initJSON.currency), "usd");
   const expectedAmount = firstNonEmpty(
-    valueString(taxJSON?.total_summary?.due),
-    valueString(taxJSON?.total_summary?.total),
+    valueString(initJSON?.total_summary?.due),
+    valueString(initJSON?.total_summary?.total),
     "0",
   );
 
-  const elementsQuery = new URLSearchParams();
-  elementsQuery.set("deferred_intent[mode]", "subscription");
-  elementsQuery.set("deferred_intent[amount]", expectedAmount);
-  elementsQuery.set("deferred_intent[currency]", "usd");
-  elementsQuery.set("deferred_intent[setup_future_usage]", "off_session");
-  elementsQuery.set("deferred_intent[payment_method_types][0]", "card");
-  elementsQuery.set("currency", "usd");
-  elementsQuery.set("elements_init_source", "custom_checkout");
-  elementsQuery.set("referrer_host", "chatgpt.com");
-  elementsQuery.set("stripe_js_id", clientSessionID);
-  elementsQuery.set("locale", "zh");
-  elementsQuery.set("type", "deferred_intent");
-  elementsQuery.set("checkout_session_id", checkoutSessionId);
-  const elementsJSON = await stripeRequest(client, "GET", "/v1/elements/sessions", {
-    queryValues: elementsQuery,
-    publishableKey,
-  });
+  let elementsJSON;
+  if (mode === "setup") {
+    const setupIntentClientSecret = valueString(initJSON?.setup_intent?.client_secret);
+    if (!setupIntentClientSecret) {
+      throw new Error("setup 模式缺少 setup_intent.client_secret");
+    }
+    const elementsQuery = new URLSearchParams();
+    elementsQuery.set("type", "setup_intent");
+    elementsQuery.set("client_secret", setupIntentClientSecret);
+    elementsQuery.set("currency", currency);
+    elementsQuery.set("elements_init_source", "custom_checkout");
+    elementsQuery.set("referrer_host", "chatgpt.com");
+    elementsQuery.set("stripe_js_id", clientSessionID);
+    elementsQuery.set("locale", "zh");
+    elementsJSON = await stripeRequest(client, "GET", "/v1/elements/sessions", {
+      queryValues: elementsQuery,
+      publishableKey,
+    });
+  } else {
+    const taxBody = new URLSearchParams();
+    taxBody.set("tax_region[country]", firstNonEmpty(profile.country, DEFAULT_PROFILE.country));
+    taxBody.set("tax_region[line1]", firstNonEmpty(profile.line1, DEFAULT_PROFILE.line1));
+    taxBody.set("tax_region[city]", firstNonEmpty(profile.city, DEFAULT_PROFILE.city));
+    taxBody.set("tax_region[postal_code]", firstNonEmpty(profile.postal, DEFAULT_PROFILE.postal));
+    taxBody.set("tax_region[state]", firstNonEmpty(profile.state, DEFAULT_PROFILE.state));
+    taxBody.set("elements_session_client[elements_init_source]", "custom_checkout");
+    taxBody.set("elements_session_client[referrer_host]", "chatgpt.com");
+    taxBody.set("elements_session_client[session_id]", seededElementsSessionID);
+    taxBody.set("elements_session_client[stripe_js_id]", clientSessionID);
+    taxBody.set("elements_session_client[locale]", "zh");
+    taxBody.set("elements_session_client[is_aggregation_expected]", "false");
+    taxBody.set("client_attribution_metadata[merchant_integration_additional_elements][0]", "payment");
+    taxBody.set("client_attribution_metadata[merchant_integration_additional_elements][1]", "address");
+    const taxJSON = await stripeRequest(client, "POST", `/v1/payment_pages/${encodeURIComponent(checkoutSessionId)}`, {
+      bodyValues: taxBody,
+      publishableKey,
+    });
+
+    const elementsQuery = new URLSearchParams();
+    elementsQuery.set("deferred_intent[mode]", "subscription");
+    elementsQuery.set("deferred_intent[amount]", expectedAmount);
+    elementsQuery.set("deferred_intent[currency]", currency);
+    elementsQuery.set("deferred_intent[setup_future_usage]", "off_session");
+    elementsQuery.set("deferred_intent[payment_method_types][0]", "card");
+    elementsQuery.set("currency", currency);
+    elementsQuery.set("elements_init_source", "custom_checkout");
+    elementsQuery.set("referrer_host", "chatgpt.com");
+    elementsQuery.set("stripe_js_id", clientSessionID);
+    elementsQuery.set("locale", "zh");
+    elementsQuery.set("type", "deferred_intent");
+    elementsQuery.set("checkout_session_id", checkoutSessionId);
+    elementsJSON = await stripeRequest(client, "GET", "/v1/elements/sessions", {
+      queryValues: elementsQuery,
+      publishableKey,
+    });
+
+    if (!clean(initChecksum) && clean(taxJSON.init_checksum)) {
+      initJSON.init_checksum = taxJSON.init_checksum;
+    }
+    if (!clean(checkoutConfigID) && clean(taxJSON.config_id)) {
+      initJSON.config_id = taxJSON.config_id;
+    }
+  }
 
   const elementsSessionID = firstNonEmpty(valueString(elementsJSON.session_id), seededElementsSessionID);
   const elementsConfigID = valueString(elementsJSON.config_id);
@@ -322,7 +350,7 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   confirmBody.set("payment_method_data[card][exp_month]", card.expMonth);
   confirmBody.set("payment_method_data[allow_redisplay]", "unspecified");
   confirmBody.set("payment_method_data[pasted_fields]", "number,cvc");
-  confirmBody.set("payment_method_data[payment_user_agent]", `stripe.js/${DEFAULT_JS_VERSION}; stripe-js-v3/${DEFAULT_JS_VERSION}; payment-element; deferred-intent`);
+  confirmBody.set("payment_method_data[payment_user_agent]", `stripe.js/${DEFAULT_JS_VERSION}; stripe-js-v3/${DEFAULT_JS_VERSION}; payment-element; ${mode === "setup" ? "setup-intent" : "deferred-intent"}`);
   confirmBody.set("payment_method_data[referrer]", "https://chatgpt.com");
   confirmBody.set("payment_method_data[time_on_page]", "120000");
   confirmBody.set("payment_method_data[client_attribution_metadata][client_session_id]", clientSessionID);
@@ -330,7 +358,9 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   confirmBody.set("payment_method_data[client_attribution_metadata][merchant_integration_source]", "elements");
   confirmBody.set("payment_method_data[client_attribution_metadata][merchant_integration_subtype]", "payment-element");
   confirmBody.set("payment_method_data[client_attribution_metadata][merchant_integration_version]", "2021");
-  confirmBody.set("payment_method_data[client_attribution_metadata][payment_intent_creation_flow]", "deferred");
+  if (mode !== "setup") {
+    confirmBody.set("payment_method_data[client_attribution_metadata][payment_intent_creation_flow]", "deferred");
+  }
   confirmBody.set("payment_method_data[client_attribution_metadata][payment_method_selection_flow]", "automatic");
   confirmBody.set("payment_method_data[client_attribution_metadata][elements_session_id]", elementsSessionID);
   if (elementsConfigID) confirmBody.set("payment_method_data[client_attribution_metadata][elements_session_config_id]", elementsConfigID);
@@ -339,9 +369,10 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   confirmBody.set("payment_method_data[client_attribution_metadata][merchant_integration_additional_elements][1]", "address");
   if (initChecksum) confirmBody.set("init_checksum", initChecksum);
   confirmBody.set("version", DEFAULT_JS_VERSION);
-  confirmBody.set("expected_amount", expectedAmount);
+  if (mode !== "setup") {
+    confirmBody.set("expected_amount", expectedAmount);
+  }
   confirmBody.set("expected_payment_method_type", "card");
-  if (returnURL) confirmBody.set("return_url", returnURL);
   confirmBody.set("elements_session_client[elements_init_source]", "custom_checkout");
   confirmBody.set("elements_session_client[referrer_host]", "chatgpt.com");
   confirmBody.set("elements_session_client[session_id]", elementsSessionID);
@@ -353,7 +384,9 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   confirmBody.set("client_attribution_metadata[merchant_integration_source]", "checkout");
   confirmBody.set("client_attribution_metadata[merchant_integration_subtype]", "payment-element");
   confirmBody.set("client_attribution_metadata[merchant_integration_version]", "custom");
-  confirmBody.set("client_attribution_metadata[payment_intent_creation_flow]", "deferred");
+  if (mode !== "setup") {
+    confirmBody.set("client_attribution_metadata[payment_intent_creation_flow]", "deferred");
+  }
   confirmBody.set("client_attribution_metadata[payment_method_selection_flow]", "automatic");
   confirmBody.set("client_attribution_metadata[elements_session_id]", elementsSessionID);
   if (elementsConfigID) confirmBody.set("client_attribution_metadata[elements_session_config_id]", elementsConfigID);
@@ -1296,7 +1329,8 @@ function parseNextActionType(raw) {
 }
 
 function resolveFailureReason(payload, result) {
-  if (result.paymentStatus === "paid" || result.paymentIntent === "succeeded") return "none";
+  if (result.paymentStatus === "paid" || result.paymentIntent === "succeeded" || result.setupIntent === "succeeded") return "none";
+  if (result.submissionState === "succeeded" && !clean(payload?.three_ds_error)) return "none";
   if (normalizedKnownField(clean(payload?.three_ds_error))) return normalizedKnownField(clean(payload?.three_ds_error));
   if (normalizedKnownField(result.nextActionType)) return normalizedKnownField(result.nextActionType);
 
