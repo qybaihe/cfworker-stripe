@@ -148,13 +148,13 @@ export default {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const isBadRequest = err instanceof SyntaxError || /格式|不能为空|不正确|必须|参数|invalid/i.test(message);
+        const isBadRequest = err instanceof SyntaxError || /格式|不能为空|不正确|必须|参数|invalid|stripe http 4\d\d|card_declined|decline_code|requires_action/i.test(message);
         const status = isBadRequest ? 400 : 500;
         return jsonResponse({ success: false, error: trimMessage(message) }, status, env);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const isBadRequest = err instanceof SyntaxError || /格式|不能为空|不正确|必须|参数|invalid/i.test(message);
+      const isBadRequest = err instanceof SyntaxError || /格式|不能为空|不正确|必须|参数|invalid|stripe http 4\d\d|card_declined|decline_code|requires_action/i.test(message);
       const status = isBadRequest ? 400 : 500;
       return jsonResponse({ success: false, error: trimMessage(message) }, status, env);
     }
