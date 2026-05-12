@@ -1,5 +1,5 @@
-const DEFAULT_STRIPE_VERSION = "2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1";
-const DEFAULT_INIT_BODY = "browser_locale=zh-CN&browser_timezone=Asia%2FShanghai&elements_session_client[client_betas][0]=custom_checkout_server_updates_1&elements_session_client[client_betas][1]=custom_checkout_manual_approval_1&elements_session_client[elements_init_source]=custom_checkout&elements_session_client[referrer_host]=chatgpt.com&elements_session_client[locale]=zh-CN&elements_session_client[is_aggregation_expected]=false";
+const DEFAULT_STRIPE_VERSION = "2025-03-31.basil";
+const DEFAULT_INIT_BODY = "browser_locale=zh-CN&browser_timezone=Asia%2FShanghai&elements_session_client[elements_init_source]=custom_checkout&elements_session_client[referrer_host]=chatgpt.com&elements_session_client[locale]=zh-CN&elements_session_client[is_aggregation_expected]=false";
 const DEFAULT_JS_VERSION = "5412f474d5";
 
 const DEFAULT_PROFILE = {
@@ -262,8 +262,6 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   taxBody.set("tax_region[city]", firstNonEmpty(profile.city, DEFAULT_PROFILE.city));
   taxBody.set("tax_region[postal_code]", firstNonEmpty(profile.postal, DEFAULT_PROFILE.postal));
   taxBody.set("tax_region[state]", firstNonEmpty(profile.state, DEFAULT_PROFILE.state));
-  taxBody.set("elements_session_client[client_betas][0]", "custom_checkout_server_updates_1");
-  taxBody.set("elements_session_client[client_betas][1]", "custom_checkout_manual_approval_1");
   taxBody.set("elements_session_client[elements_init_source]", "custom_checkout");
   taxBody.set("elements_session_client[referrer_host]", "chatgpt.com");
   taxBody.set("elements_session_client[session_id]", seededElementsSessionID);
@@ -286,8 +284,6 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   );
 
   const elementsQuery = new URLSearchParams();
-  elementsQuery.set("client_betas[0]", "custom_checkout_server_updates_1");
-  elementsQuery.set("client_betas[1]", "custom_checkout_manual_approval_1");
   elementsQuery.set("deferred_intent[mode]", "subscription");
   elementsQuery.set("deferred_intent[amount]", expectedAmount);
   elementsQuery.set("deferred_intent[currency]", "usd");
@@ -346,8 +342,6 @@ async function runStripeBindFlow(client, checkoutSessionId, publishableKey, card
   confirmBody.set("expected_amount", expectedAmount);
   confirmBody.set("expected_payment_method_type", "card");
   if (returnURL) confirmBody.set("return_url", returnURL);
-  confirmBody.set("elements_session_client[client_betas][0]", "custom_checkout_server_updates_1");
-  confirmBody.set("elements_session_client[client_betas][1]", "custom_checkout_manual_approval_1");
   confirmBody.set("elements_session_client[elements_init_source]", "custom_checkout");
   confirmBody.set("elements_session_client[referrer_host]", "chatgpt.com");
   confirmBody.set("elements_session_client[session_id]", elementsSessionID);
